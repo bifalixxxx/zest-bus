@@ -49,6 +49,9 @@
 
 <script>
 (() => {
+  // 🔗 Mets ICI l'URL de ton API Vercel:
+  const DELAYS_API = "https://zest-bus.vercel.app/api/delays";
+
   const state = { DB:null, DELAYS:{} };
   const $ = sel => document.querySelector(sel);
   const lineSel = $('#line'), dirSel = $('#dir'), qInput = $('#q'), results = $('#results');
@@ -60,13 +63,13 @@
     const [h,m]=hhmm.split(':').map(Number);
     const dt=new Date(now); dt.setHours(h,m,0,0);
     let diff=Math.round((dt-now)/60000);
-    if(diff<-720) diff+=1440; // si le prochain est demain
+    if(diff<-720) diff+=1440;
     return diff;
   }
   function addMinutes(hhmm, add){
     const [h,m]=hhmm.split(':').map(Number);
     let total=h*60+m+add;
-    total = (total%1440+1440)%1440; // wrap 24h
+    total = (total%1440+1440)%1440;
     return pad(Math.floor(total/60))+':'+pad(total%60);
   }
   function nextTimes(times, limit=4){
@@ -77,9 +80,7 @@
     return pick.map(tm=>pad(Math.floor(tm/60))+':'+pad(tm%60));
   }
 
-  // ---- DELAYS helpers ----
   function getLineDelay(lineNumber){
-    // retard en minutes pour la ligne (entier)
     const v = state.DELAYS[lineNumber];
     return Number.isFinite(v) ? v : 0;
   }
@@ -133,19 +134,16 @@
       return;
     }
     items.forEach(it=>{
-      const lineDelay = getLineDelay(it.line); // minutes
+      const lineDelay = getLineDelay(it.line);
       const nextsPlanned = nextTimes(it.times, 4);
       const nextsAdjusted = nextsPlanned.map(t => addMinutes(t, lineDelay));
       const deltas = nextsAdjusted.map(t => minsFromNow(t));
-
       const grid = nextsAdjusted.map((t,i)=>`
         <div>${t}</div>
         <div style="text-align:right">${deltas[i]} min</div>
         <div><span class="badge red">+${lineDelay}</span></div>
       `).join('');
-
-      const el = document.createElement('div');
-      el.className = 'card';
+      const el = document.createElement('div'); el.className='card';
       el.innerHTML = `<h3>Ligne ${it.line} — ${it.stop}</h3>
         <div class="meta">${it.dir}</div>
         <div class="grid">${grid}</div>`;
@@ -153,19 +151,29 @@
     });
   }
 
+  async function fetchDelays(){
+    try{
+      const r = await fetch(DELAYS_API, { cache:'no-store' });
+      if(r.ok){
+        state.DELAYS = await r.json();
+        computeKPIs();
+        render();
+      }
+    }catch(e){ /* silencieux */ }
+  }
+
   async function init(){
     try{
-      const [dbRes, delayRes] = await Promise.all([
-        fetch('./zekst_bus.json', { cache:'no-store' }),
-        fetch('./delays.json', { cache:'no-store' }).catch(()=>null)
-      ]);
+      const dbRes = await fetch('./zekst_bus.json', { cache:'no-store' });
       if(!dbRes.ok) throw new Error('Chargement zekst_bus.json: '+dbRes.status);
       state.DB = await dbRes.json();
-      state.DELAYS = delayRes && delayRes.ok ? await delayRes.json() : {};
 
       populateSelectors();
-      computeKPIs();
       render();
+
+      // 1er chargement des retards puis refresh toutes les 2 min
+      await fetchDelays();
+      setInterval(fetchDelays, 120000);
 
       qInput.addEventListener('input', render);
       lineSel.addEventListener('change', ()=>{ updateDirOptions(); render(); });
