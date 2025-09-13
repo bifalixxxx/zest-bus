@@ -20,6 +20,7 @@
     .card h3{margin:0 0 6px 0;font-size:16px}.meta{color:var(--subtle);font-size:13px}
     .grid{display:grid;grid-template-columns:1fr auto auto;gap:6px;align-items:center;margin-top:10px}
     .badge{padding:2px 6px;border-radius:8px;font-size:12px;background:#1f273a;color:#cbd5e1}
+    .badge.red{background:#3b0f12;color:#fecaca;border:1px solid #7f1d1d}
     .pill{display:inline-flex;gap:8px;align-items:center;padding:6px 10px;border-radius:999px;background:var(--pill);font-size:12px}
     footer{color:#7b7f8f;font-size:12px;text-align:center;padding:20px 10px}
   </style>
@@ -37,20 +38,21 @@
       <select id="dir"><option value="">Tous sens</option></select>
     </div>
     <div class="row">
-      <div class="pill">⏱️ Retards temps réel (à connecter)</div>
-      <div class="pill">🔁 Données fixes JSON</div>
-      <div class="pill">🧭 Fuseau: navigateur</div>
+      <div class="pill">⏱️ Retards trafic (appliqués)</div>
+      <div class="pill">🚌 Retard moyen: <span id="avgDelay">0 min</span></div>
+      <div class="pill">⚠️ Ligne la + perturbée: <span id="mostPert">—</span></div>
     </div>
   </section>
   <div id="results" class="cards"></div>
 </main>
-<footer>© Zekst — JSON statique depuis PDF.</footer>
+<footer>© Zekst — JSON statique + retards appliqués.</footer>
 
 <script>
 (() => {
-  const state = { DB:null };
+  const state = { DB:null, DELAYS:{} };
   const $ = sel => document.querySelector(sel);
   const lineSel = $('#line'), dirSel = $('#dir'), qInput = $('#q'), results = $('#results');
+  const avgDelayEl = $('#avgDelay'), mostPertEl = $('#mostPert');
 
   function pad(n){ return n<10 ? '0'+n : ''+n; }
   function minsFromNow(hhmm){
@@ -58,32 +60,48 @@
     const [h,m]=hhmm.split(':').map(Number);
     const dt=new Date(now); dt.setHours(h,m,0,0);
     let diff=Math.round((dt-now)/60000);
-    if(diff<-720) diff+=1440; // passage minuit
+    if(diff<-720) diff+=1440; // si le prochain est demain
     return diff;
+  }
+  function addMinutes(hhmm, add){
+    const [h,m]=hhmm.split(':').map(Number);
+    let total=h*60+m+add;
+    total = (total%1440+1440)%1440; // wrap 24h
+    return pad(Math.floor(total/60))+':'+pad(total%60);
   }
   function nextTimes(times, limit=4){
     const nowMin=new Date().getHours()*60+new Date().getMinutes();
-    const day=times.map(t=>{const [h,m]=t.split(':').map(Number);return h*60+m;});
+    const day=times.map(t=>{const [h,m]=t.split(':').map(Number);return h*60+m});
     const future=day.filter(tm=>tm>=nowMin);
     const pick=(future.length?future:day).slice(0,limit);
     return pick.map(tm=>pad(Math.floor(tm/60))+':'+pad(tm%60));
   }
 
+  // ---- DELAYS helpers ----
+  function getLineDelay(lineNumber){
+    // retard en minutes pour la ligne (entier)
+    const v = state.DELAYS[lineNumber];
+    return Number.isFinite(v) ? v : 0;
+  }
+  function computeKPIs(){
+    const entries = Object.entries(state.DELAYS).filter(([k,v])=>Number.isFinite(v));
+    if(!entries.length){ avgDelayEl.textContent='0 min'; mostPertEl.textContent='—'; return; }
+    const avg = Math.round(entries.reduce((a,[_k,v])=>a+v,0)/entries.length);
+    const max = entries.reduce((best, cur)=> cur[1]>best[1]?cur:best);
+    avgDelayEl.textContent = avg+' min';
+    mostPertEl.textContent = 'Ligne '+max[0]+' (+'+max[1]+' min)';
+  }
+
   function populateSelectors(){
-    // lignes
     const lines = [...new Set(state.DB.lines.map(l=>l.line))].sort();
     lineSel.innerHTML = '<option value="">Toutes lignes</option>' +
       lines.map(ln=>`<option value="${ln}">Ligne ${ln}</option>`).join('');
-    // dirs (tous sens par défaut)
     updateDirOptions();
   }
-
   function updateDirOptions(){
     const ln = lineSel.value;
     const dirs = [];
-    state.DB.lines.filter(l=>!ln || l.line===ln).forEach(l=>{
-      l.directions.forEach(d=>dirs.push(d.direction));
-    });
+    state.DB.lines.filter(l=>!ln || l.line===ln).forEach(l=>l.directions.forEach(d=>dirs.push(d.direction)));
     dirSel.innerHTML = '<option value="">Tous sens</option>' +
       [...new Set(dirs)].map(d=>`<option value="${d}">${d}</option>`).join('');
   }
@@ -115,13 +133,17 @@
       return;
     }
     items.forEach(it=>{
-      const nexts = nextTimes(it.times, 4);
-      const deltas = nexts.map(t=>minsFromNow(t));
-      const grid = nexts.map((t,i)=>`
+      const lineDelay = getLineDelay(it.line); // minutes
+      const nextsPlanned = nextTimes(it.times, 4);
+      const nextsAdjusted = nextsPlanned.map(t => addMinutes(t, lineDelay));
+      const deltas = nextsAdjusted.map(t => minsFromNow(t));
+
+      const grid = nextsAdjusted.map((t,i)=>`
         <div>${t}</div>
         <div style="text-align:right">${deltas[i]} min</div>
-        <div><span class="badge">+0</span></div>
+        <div><span class="badge red">+${lineDelay}</span></div>
       `).join('');
+
       const el = document.createElement('div');
       el.className = 'card';
       el.innerHTML = `<h3>Ligne ${it.line} — ${it.stop}</h3>
@@ -133,12 +155,16 @@
 
   async function init(){
     try{
-      // chemin relatif (même dossier que index.html)
-      const res = await fetch('./zekst_bus.json', { cache: 'no-store' });
-      if(!res.ok) throw new Error('fetch JSON: '+res.status);
-      state.DB = await res.json();
+      const [dbRes, delayRes] = await Promise.all([
+        fetch('./zekst_bus.json', { cache:'no-store' }),
+        fetch('./delays.json', { cache:'no-store' }).catch(()=>null)
+      ]);
+      if(!dbRes.ok) throw new Error('Chargement zekst_bus.json: '+dbRes.status);
+      state.DB = await dbRes.json();
+      state.DELAYS = delayRes && delayRes.ok ? await delayRes.json() : {};
 
       populateSelectors();
+      computeKPIs();
       render();
 
       qInput.addEventListener('input', render);
@@ -146,10 +172,9 @@
       dirSel.addEventListener('change', render);
     }catch(err){
       console.error(err);
-      results.innerHTML = '<div class="card"><div class="meta">Erreur de chargement des données. Vérifie que <code>zekst_bus.json</code> est à côté de <code>index.html</code>.</div></div>';
+      results.innerHTML = '<div class="card"><div class="meta">Erreur de chargement. Vérifie que <code>zekst_bus.json</code> est à côté de <code>index.html</code>.</div></div>';
     }
   }
-
   window.addEventListener('DOMContentLoaded', init);
 })();
 </script>
