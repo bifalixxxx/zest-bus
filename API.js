@@ -1,64 +1,113 @@
-// api/delays.js — Vercel serverless
-// Renvoie { "11": min, "12": min, "13": min, "18": min, "24": min }.
-// Si WAZE_JAMS_URL n'est pas défini/accessible → valeurs de démo.
+// api/delays.js — TomTom Traffic → minutes de retard par ligne (Monaco/Menton).
+// Renvoie: { "11": min, "12": min, "13": min, "18": min, "24": min }.
+// Besoin d'une variable d'env: TOMTOM_KEY (Project → Settings → Environment Variables).
 
-const LINE_ZONES = {
-  "11": [[43.727, 7.396, 43.764, 7.428]], // Monaco ↔ La Turbie (large, à affiner)
-  "12": [[43.731, 7.404, 43.751, 7.431]], // Beausoleil
-  "13": [[43.731, 7.404, 43.748, 7.430]], // Moneghetti
-  "18": [[43.735, 7.409, 43.785, 7.494]], // Monaco ↔ Menton (littoral)
-  "24": [[43.763, 7.456, 43.795, 7.530]]  // Menton
+const TOMTOM_KEY = process.env.TOMTOM_KEY;
+const ZOOM = 10;                 // résolution du segment (5..15). 10 = ~100-200m
+const FREE_MAX = 50;             // km/h "freeflow" minimum raisonnable si API retourne 0
+const MAX_LINE_DELAY = 25;       // borne max par ligne (minutes)
+const TIMEOUT_MS = 5000;         // timeout requête TomTom
+
+// Points représentatifs par ligne (lat,lng). On moyenne les retards sur ces points.
+// Ajuste/ajoute des points si tu veux être plus précis.
+const LINE_POINTS = {
+  "11": [
+    [43.7379, 7.4209], // Pont Ste Dévote
+    [43.7447, 7.4040], // Beausoleil haut
+    [43.7442, 7.4010], // Vers La Turbie
+  ],
+  "12": [
+    [43.7395, 7.4238], // Casino / O.T.
+    [43.7425, 7.4248], // Marché Beausoleil
+    [43.7460, 7.4220], // Moneghetti
+  ],
+  "13": [
+    [43.7405, 7.4205], // Malbousquet / Moneghetti
+    [43.7420, 7.4232], // Crèche/Gymnase
+    [43.7390, 7.4230], // Pont Ste Dévote
+  ],
+  "18": [
+    [43.7385, 7.4246], // Monaco centre
+    [43.7663, 7.4915], // Menton centre
+    [43.7725, 7.4964], // Bord de mer Menton
+  ],
+  "24": [
+    [43.7746, 7.4940], // Carnolès / SNCF
+    [43.7779, 7.5041], // Menton plage
+    [43.7808, 7.5122], // Garavan
+  ],
 };
 
-const FREEFLOW_KMH = 40;             // vitesse libre urbaine (simple)
-const MAX_DELAY_PER_LINE_MIN = 25;   // borne anti-valeurs folles
-const FEED = process.env.WAZE_JAMS_URL; // URL JSON {jams:[...], alerts:[...]}
+// --- utilitaires ---
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-function pointInBbox(lat, lng, [minLat, minLng, maxLat, maxLng]) {
-  return lat >= minLat && lat <= maxLat && lng >= minLng && lng <= maxLng;
+async function fetchTomTom(point) {
+  const [lat, lng] = point;
+  const url = `https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/${ZOOM}/json?point=${lat},${lng}&key=${TOMTOM_KEY}`;
+  const ctl = new AbortController();
+  const to = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  try {
+    const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' });
+    if (!r.ok) throw new Error('TomTom HTTP ' + r.status);
+    return await r.json();
+  } finally {
+    clearTimeout(to);
+  }
 }
-function jamTouchesZones(jam, zones) {
-  if (!jam?.line?.length) return false; // Waze: jam.line = [[lng,lat], ...]
-  return jam.line.some(([lng, lat]) => zones.some(b => pointInBbox(lat, lng, b)));
+
+function delayFromTomTomJson(data) {
+  // Docs: renvoie entre autres currentTravelTime (s), freeFlowTravelTime (s)
+  const cur = Number(data?.flowSegmentData?.currentTravelTime);
+  let free = Number(data?.flowSegmentData?.freeFlowTravelTime);
+  // garde-fous
+  if (!Number.isFinite(cur) || cur <= 0) return 0;
+  if (!Number.isFinite(free) || free <= 0) {
+    // fallback si freeFlow absent: approx depuis vitesse "freeflow"
+    const len = Number(data?.flowSegmentData?.frcRoadClass) ? 0 : 0; // pas fiable → on évite
+    // par prudence, considère 0
+    free = Math.max(1, Math.round(cur * 0.8));
+  }
+  const deltaSec = Math.max(0, cur - free);
+  return deltaSec / 60; // minutes
 }
-function minutesLostOnJam(jam) {
-  const lengthKm = (jam?.length || 0) / 1000;
-  let speedKmh = 0;
-  if (typeof jam.speedKMH === "number") speedKmh = jam.speedKMH;
-  else if (typeof jam.speed === "number") speedKmh = jam.speed * 3.6;
-  if (speedKmh <= 0) speedKmh = 5; // évite division par 0
-  const tNow = (lengthKm / speedKmh) * 60;
-  const tFree = (lengthKm / FREEFLOW_KMH) * 60;
-  return Math.max(0, tNow - tFree);
+
+async function delayForLine(points) {
+  const deltas = [];
+  for (let i = 0; i < points.length; i++) {
+    try {
+      const json = await fetchTomTom(points[i]);
+      deltas.push(delayFromTomTomJson(json));
+      // petit throttle pour ne pas spammer
+      if (i < points.length - 1) await sleep(150);
+    } catch (_e) {
+      // ignore point en erreur
+    }
+  }
+  if (!deltas.length) return 0;
+  // moyenne robuste (trim 1 valeur extrême si >3 points)
+  deltas.sort((a,b)=>a-b);
+  const arr = deltas.length > 2 ? deltas.slice(1, -1) : deltas;
+  const avg = arr.reduce((a,b)=>a+b,0)/arr.length;
+  return Math.min(MAX_LINE_DELAY, Math.round(avg));
 }
 
 export default async function handler(req, res) {
   try {
-    if (!FEED) {
-      // Démo si pas encore d'URL Waze
-      return res.status(200).json({ "11": 0, "12": 2, "13": 0, "18": 15, "24": 7 });
+    if (!TOMTOM_KEY) {
+      // démo si pas de clé
+      return res.status(200).json({ "11": 1, "12": 3, "13": 0, "18": 12, "24": 5 });
     }
 
-    const r = await fetch(FEED, { cache: "no-store" });
-    if (!r.ok) throw new Error("Feed HTTP " + r.status);
-    const data = await r.json();
-    const jams = Array.isArray(data?.jams) ? data.jams : [];
+    const out = { "11":0, "12":0, "13":0, "18":0, "24":0 };
+    // lance en parallèle par ligne
+    await Promise.all(Object.keys(LINE_POINTS).map(async line => {
+      out[line] = await delayForLine(LINE_POINTS[line]);
+    }));
 
-    const delays = { "11": 0, "12": 0, "13": 0, "18": 0, "24": 0 };
-    for (const jam of jams) {
-      for (const line of Object.keys(LINE_ZONES)) {
-        if (jamTouchesZones(jam, LINE_ZONES[line])) {
-          delays[line] += minutesLostOnJam(jam);
-        }
-      }
-    }
-    for (const k of Object.keys(delays)) {
-      delays[k] = Math.min(MAX_DELAY_PER_LINE_MIN, Math.round(delays[k]));
-    }
-    res.setHeader("Cache-Control", "no-store");
-    return res.status(200).json(delays);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json(out);
   } catch (e) {
-    // En cas d’erreur, on reste safe
+    // fallback safe
     return res.status(200).json({ "11": 0, "12": 0, "13": 0, "18": 0, "24": 0 });
   }
 }
