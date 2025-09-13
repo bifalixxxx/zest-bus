@@ -49,7 +49,7 @@
 
 <script>
 (() => {
-  // 🔗 Mets ICI l'URL de ton API Vercel:
+  // ✅ URL de ton API Vercel (TomTom/Waze derrière)
   const DELAYS_API = "https://zest-bus.vercel.app/api/delays";
 
   const state = { DB:null, DELAYS:{} };
@@ -159,7 +159,7 @@
         computeKPIs();
         render();
       }
-    }catch(e){ /* silencieux */ }
+    }catch(e){}
   }
 
   async function init(){
@@ -171,9 +171,8 @@
       populateSelectors();
       render();
 
-      // 1er chargement des retards puis refresh toutes les 2 min
-      await fetchDelays();
-      setInterval(fetchDelays, 120000);
+      await fetchDelays();               // premier chargement
+      setInterval(fetchDelays, 120000);  // refresh toutes les 2 min
 
       qInput.addEventListener('input', render);
       lineSel.addEventListener('change', ()=>{ updateDirOptions(); render(); });
