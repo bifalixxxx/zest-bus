@@ -1,113 +1,184 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="fr">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Zest Bus</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Zest Bus – horaires</title>
   <style>
-    body {
-      margin: 0;
-      font-family: Arial, sans-serif;
-      background: #111;
-      color: #fff;
-    }
-    header {
-      background: #004080;
-      padding: 10px;
-      text-align: center;
-    }
-    header h1 {
-      margin: 0;
-      font-size: 22px;
-    }
-    /* 🔴 Message maintenance */
-    .maintenance {
-      background: #b00020;
-      color: #fff;
-      font-weight: bold;
-      font-size: 18px;
-      text-align: center;
-      padding: 12px;
-    }
-    .bus-list {
-      padding: 20px;
-    }
-    select, button {
-      margin: 5px;
-      padding: 6px;
-      border-radius: 5px;
-    }
-    .delay {
-      color: red;
-      font-weight: bold;
-    }
+    :root{--bg:#0a0a0b;--card:#131317;--text:#fafafc;--subtle:#a9abb6;--pill:#1e1e25}
+    *{box-sizing:border-box}body{margin:0;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;background:#0b0c12;color:var(--text)}
+    header{position:sticky;top:0;display:flex;gap:12px;align-items:center;padding:14px 16px;background:rgba(10,10,11,.85);backdrop-filter:blur(8px);border-bottom:1px solid #1f2030}
+    header img{width:40px;height:40px;border-radius:10px;object-fit:cover}
+    main{padding:16px;max-width:960px;margin:0 auto}
+    .search{display:grid;gap:10px}
+    .row{display:grid;grid-template-columns:1fr;gap:10px}
+    @media(min-width:720px){.row{grid-template-columns:2fr 1fr 1fr}}
+    input,select{width:100%;padding:12px 14px;border-radius:12px;border:1px solid #26283a;background:#0f0f15;color:var(--text);font-size:16px}
+    .cards{display:grid;grid-template-columns:1fr;gap:12px;margin-top:18px}
+    @media(min-width:900px){.cards{grid-template-columns:1fr 1fr}}
+    .card{background:var(--card);border:1px solid #232437;border-radius:16px;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .card h3{margin:0 0 6px 0;font-size:16px}.meta{color:var(--subtle);font-size:13px}
+    .grid{display:grid;grid-template-columns:1fr auto auto;gap:6px;align-items:center;margin-top:10px}
+    .badge{padding:2px 6px;border-radius:8px;font-size:12px;background:#1f273a;color:#cbd5e1}
+    .badge.red{background:#3b0f12;color:#fecaca;border:1px solid #7f1d1d}
+    .pill{display:inline-flex;gap:8px;align-items:center;padding:6px 10px;border-radius:999px;background:var(--pill);font-size:12px}
+    footer{color:#7b7f8f;font-size:12px;text-align:center;padding:20px 10px}
   </style>
 </head>
 <body>
+
   <!-- 🔴 Bandeau maintenance -->
-  <div class="maintenance">
+  <div style="background:#b00020;color:white;font-weight:bold;
+              font-size:20px;text-align:center;padding:12px;">
     ⚠️ Le site est en maintenance — Les lignes 24 et 18 peuvent ne pas s’afficher
   </div>
 
-  <header>
-    <h1>Zest Bus</h1>
-  </header>
+<header>
+  <img src="logo.png" alt="logo" onerror="this.style.display='none'"/>
+  <div><div style="font-weight:800">Zest Bus</div><div style="color:#94a3b8;font-size:12px">Horaires & prochains passages</div></div>
+</header>
+<main>
+  <section class="search">
+    <div class="row">
+      <input id="q" type="search" placeholder="Rechercher un arrêt… (ex: Pont Ste Dévote, Marché, Les Platanes)"/>
+      <select id="line"><option value="">Toutes lignes</option></select>
+      <select id="dir"><option value="">Tous sens</option></select>
+    </div>
+    <div class="row">
+      <div class="pill">⏱️ Retards trafic (appliqués)</div>
+      <div class="pill">🚌 Retard moyen: <span id="avgDelay">0 min</span></div>
+      <div class="pill">⚠️ Ligne la + perturbée: <span id="mostPert">—</span></div>
+    </div>
+  </section>
+  <div id="results" class="cards"></div>
+</main>
+<footer>© Zest — JSON statique + retards appliqués.</footer>
 
-  <div class="bus-list">
-    <label for="line">Choisir une ligne :</label>
-    <select id="line">
-      <option value="all">Toutes lignes</option>
-      <option value="11">Ligne 11</option>
-      <option value="12">Ligne 12</option>
-      <option value="13">Ligne 13</option>
-      <option value="18">Ligne 18</option>
-      <option value="24">Ligne 24</option>
-    </select>
+<script>
+(() => {
+  const state = { DB:null, DELAYS:{} };
+  const $ = sel => document.querySelector(sel);
+  const lineSel = $('#line'), dirSel = $('#dir'), qInput = $('#q'), results = $('#results');
+  const avgDelayEl = $('#avgDelay'), mostPertEl = $('#mostPert');
 
-    <div id="schedules"></div>
-  </div>
+  function pad(n){ return n<10 ? '0'+n : ''+n; }
+  function minsFromNow(hhmm){
+    const now=new Date();
+    const [h,m]=hhmm.split(':').map(Number);
+    const dt=new Date(now); dt.setHours(h,m,0,0);
+    let diff=Math.round((dt-now)/60000);
+    if(diff<-720) diff+=1440;
+    return diff;
+  }
+  function addMinutes(hhmm, add){
+    const [h,m]=hhmm.split(':').map(Number);
+    let total=h*60+m+add;
+    total = (total%1440+1440)%1440;
+    return pad(Math.floor(total/60))+':'+pad(total%60);
+  }
+  function nextTimes(times, limit=4){
+    const nowMin=new Date().getHours()*60+new Date().getMinutes();
+    const day=times.map(t=>{const [h,m]=t.split(':').map(Number);return h*60+m});
+    const future=day.filter(tm=>tm>=nowMin);
+    const pick=(future.length?future:day).slice(0,limit);
+    return pick.map(tm=>pad(Math.floor(tm/60))+':'+pad(tm%60));
+  }
 
-  <script>
-    const DELAYS_API = "https://zest-bus.vercel.app/api/delays";
+  function getLineDelay(lineNumber){
+    const v = state.DELAYS[lineNumber];
+    return Number.isFinite(v) ? v : 0;
+  }
+  function computeKPIs(){
+    const entries = Object.entries(state.DELAYS).filter(([k,v])=>Number.isFinite(v));
+    if(!entries.length){ avgDelayEl.textContent='0 min'; mostPertEl.textContent='—'; return; }
+    const avg = Math.round(entries.reduce((a,[_k,v])=>a+v,0)/entries.length);
+    const max = entries.reduce((best, cur)=> cur[1]>best[1]?cur:best);
+    avgDelayEl.textContent = avg+' min';
+    mostPertEl.textContent = 'Ligne '+max[0]+' (+'+max[1]+' min)';
+  }
 
-    async function fetchData() {
-      const [dbRes, delayRes] = await Promise.all([
-        fetch("./zekst_bus.json", { cache: "no-store" }).then(r => r.json()),
-        fetch(DELAYS_API, { cache: "no-store" }).then(r => r.json()).catch(()=>null)
-      ]);
+  function populateSelectors(){
+    const lines = [...new Set(state.DB.lines.map(l=>l.line))].sort();
+    lineSel.innerHTML = '<option value="">Toutes lignes</option>' +
+      lines.map(ln=>`<option value="${ln}">Ligne ${ln}</option>`).join('');
+    updateDirOptions();
+  }
+  function updateDirOptions(){
+    const ln = lineSel.value;
+    const dirs = [];
+    state.DB.lines.filter(l=>!ln || l.line===ln).forEach(l=>l.directions.forEach(d=>dirs.push(d.direction)));
+    dirSel.innerHTML = '<option value="">Tous sens</option>' +
+      [...new Set(dirs)].map(d=>`<option value="${d}">${d}</option>`).join('');
+  }
 
-      return { db: dbRes, delays: delayRes };
-    }
-
-    function render(data, delays) {
-      const lineSel = document.getElementById("line").value;
-      const container = document.getElementById("schedules");
-      container.innerHTML = "";
-
-      Object.keys(data).forEach(line => {
-        if (lineSel !== "all" && lineSel !== line) return;
-        const stops = data[line];
-        const div = document.createElement("div");
-        div.innerHTML = `<h2>Ligne ${line}</h2>`;
-        stops.forEach(stop => {
-          let delay = delays?.[line] || 0;
-          let time = stop.time;
-          if (delay > 0) {
-            time += ` <span class="delay">(+${delay} min)</span>`;
+  function filterStops(){
+    const q = (qInput.value||'').toLowerCase().trim();
+    const ln = lineSel.value;
+    const dir = dirSel.value;
+    const out = [];
+    state.DB.lines.forEach(line=>{
+      if(ln && line.line!==ln) return;
+      line.directions.forEach(d=>{
+        if(dir && d.direction!==dir) return;
+        d.stops.forEach(s=>{
+          if(!q || s.name.toLowerCase().includes(q)){
+            out.push({ line: line.line, dir: d.direction, stop: s.name, times: s.times });
           }
-          div.innerHTML += `<p>${stop.name} — ${time}</p>`;
         });
-        container.appendChild(div);
       });
-    }
+    });
+    return out;
+  }
 
-    async function init() {
-      const { db, delays } = await fetchData();
-      render(db, delays || {});
-      document.getElementById("line").addEventListener("change", () => render(db, delays || {}));
+  function render(){
+    const items = filterStops().slice(0, 50);
+    results.innerHTML = '';
+    if(!items.length){
+      results.innerHTML = '<div class="card"><div class="meta">Aucun résultat — essaye un autre arrêt ou choisis une ligne.</div></div>';
+      return;
     }
+    items.forEach(it=>{
+      const lineDelay = getLineDelay(it.line);
+      const nextsPlanned = nextTimes(it.times, 4);
+      const nextsAdjusted = nextsPlanned.map(t => addMinutes(t, lineDelay));
+      const deltas = nextsAdjusted.map(t => minsFromNow(t));
+      const grid = nextsAdjusted.map((t,i)=>`
+        <div>${t}</div>
+        <div style="text-align:right">${deltas[i]} min</div>
+        <div><span class="badge red">+${lineDelay}</span></div>
+      `).join('');
+      const el = document.createElement('div'); el.className='card';
+      el.innerHTML = `<h3>Ligne ${it.line} — ${it.stop}</h3>
+        <div class="meta">${it.dir}</div>
+        <div class="grid">${grid}</div>`;
+      results.appendChild(el);
+    });
+  }
 
-    init();
-  </script>
+  async function init(){
+    try{
+      const [dbRes, delayRes] = await Promise.all([
+        fetch('./zest_bus.json', { cache:'no-store' }),
+        fetch('./delays.json', { cache:'no-store' }).catch(()=>null)
+      ]);
+      if(!dbRes.ok) throw new Error('Chargement zest_bus.json: '+dbRes.status);
+      state.DB = await dbRes.json();
+      state.DELAYS = delayRes && delayRes.ok ? await delayRes.json() : {};
+
+      populateSelectors();
+      computeKPIs();
+      render();
+
+      qInput.addEventListener('input', render);
+      lineSel.addEventListener('change', ()=>{ updateDirOptions(); render(); });
+      dirSel.addEventListener('change', render);
+    }catch(err){
+      console.error(err);
+      results.innerHTML = '<div class="card"><div class="meta">Erreur de chargement. Vérifie que <code>zest_bus.json</code> est à côté de <code>index.html</code>.</div></div>';
+    }
+  }
+  window.addEventListener('DOMContentLoaded', init);
+})();
+</script>
 </body>
 </html>
