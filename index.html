@@ -4,6 +4,11 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Zest Bus – horaires</title>
+
+  <!-- Google AdSense -->
+  <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5005112174057245"
+     crossorigin="anonymous"></script>
+
   <style>
     :root{--bg:#0a0a0b;--card:#131317;--text:#fafafc;--subtle:#a9abb6;--pill:#1e1e25}
     *{box-sizing:border-box}body{margin:0;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;background:#0b0c12;color:var(--text)}
@@ -23,11 +28,10 @@
     .badge.red{background:#3b0f12;color:#fecaca;border:1px solid #7f1d1d}
     .pill{display:inline-flex;gap:8px;align-items:center;padding:6px 10px;border-radius:999px;background:var(--pill);font-size:12px}
     footer{color:#7b7f8f;font-size:12px;text-align:center;padding:20px 10px}
-    .maintenance{background:#b91c1c;color:#fff;padding:12px;text-align:center;font-weight:700;font-size:18px}
+    footer small{display:block;color:#f87171;margin-top:6px}
   </style>
 </head>
 <body>
-<div class="maintenance">⚠️ Le site est en maintenance — Les lignes 24 et 18 peuvent ne pas s'afficher</div>
 <header>
   <img src="logo.png" alt="logo" onerror="this.style.display='none'"/>
   <div><div style="font-weight:800">Zest Bus</div><div style="color:#94a3b8;font-size:12px">Horaires & prochains passages</div></div>
@@ -45,26 +49,38 @@
       <div class="pill">⚠️ Ligne la + perturbée: <span id="mostPert">—</span></div>
     </div>
   </section>
+
   <div id="results" class="cards"></div>
+
+  <!-- Bloc pub Google -->
+  <ins class="adsbygoogle"
+       style="display:block; text-align:center; margin:20px auto;"
+       data-ad-client="ca-pub-5005112174057245"
+       data-ad-slot="1234567890"
+       data-ad-format="auto"
+       data-full-width-responsive="true"></ins>
+  <script>
+       (adsbygoogle = window.adsbygoogle || []).push({});
+  </script>
 </main>
-<footer>© Zest — JSON statique + retards appliqués.</footer>
+
+<footer>
+  © Zest — JSON statique + retards appliqués.
+  <small>(site non affilié)</small>
+</footer>
 
 <script>
 (() => {
-  // URL API Vercel
   const DELAYS_API = "https://zest-bus.vercel.app/api/delays";
-
   const state = { DB:null, DELAYS:{} };
   const $ = sel => document.querySelector(sel);
   const lineSel = $('#line'), dirSel = $('#dir'), qInput = $('#q'), results = $('#results');
   const avgDelayEl = $('#avgDelay'), mostPertEl = $('#mostPert');
-
   const KNOWN_LINES = ["11","12","13","18","24"];
 
   function pad(n){ return n<10 ? '0'+n : ''+n; }
   function minsFromNow(hhmm){
-    const now=new Date();
-    const [h,m]=hhmm.split(':').map(Number);
+    const now=new Date(); const [h,m]=hhmm.split(':').map(Number);
     const dt=new Date(now); dt.setHours(h,m,0,0);
     let diff=Math.round((dt-now)/60000);
     if(diff<-720) diff+=1440;
@@ -83,124 +99,64 @@
     const pick=(future.length?future:day).slice(0,limit);
     return pick.map(tm=>pad(Math.floor(tm/60))+':'+pad(tm%60));
   }
-  function badgeHTML(delay){ if (!delay || delay <= 0) return ''; return `<span class="badge red">+${delay}</span>`; }
-  function getLineDelay(lineNumber){ const v = state.DELAYS[lineNumber]; return Number.isFinite(v) ? v : 0; }
+  function badgeHTML(delay){ return (!delay||delay<=0)?'':`<span class="badge red">+${delay}</span>`; }
+  function getLineDelay(lineNumber){ const v=state.DELAYS[lineNumber]; return Number.isFinite(v)?v:0; }
   function computeKPIs(){
-    const entries = Object.entries(state.DELAYS).filter(([k,v])=>Number.isFinite(v));
+    const entries=Object.entries(state.DELAYS).filter(([k,v])=>Number.isFinite(v));
     if(!entries.length){ avgDelayEl.textContent='0 min'; mostPertEl.textContent='—'; return; }
-    const avg = Math.round(entries.reduce((a,[_k,v])=>a+v,0)/entries.length);
-    const max = entries.reduce((best, cur)=> cur[1]>best[1]?cur:best);
-    avgDelayEl.textContent = avg+' min';
-    mostPertEl.textContent = 'Ligne '+max[0]+' (+'+max[1]+' min)';
+    const avg=Math.round(entries.reduce((a,[_k,v])=>a+v,0)/entries.length);
+    const max=entries.reduce((best,cur)=>cur[1]>best[1]?cur:best);
+    avgDelayEl.textContent=avg+' min'; mostPertEl.textContent='Ligne '+max[0]+' (+'+max[1]+' min)';
   }
-
   function populateSelectors(){
-    const lines = [...new Set(state.DB.lines.map(l => String(l.line).trim()))]
-      .concat(KNOWN_LINES)
-      .filter((v,i,a)=>a.indexOf(v)===i)
-      .sort((a,b)=> Number(a) - Number(b));
-    lineSel.innerHTML = '<option value="">Toutes lignes</option>' +
-      lines.map(ln=>`<option value="${ln}">Ligne ${ln}</option>`).join('');
+    const lines=[...new Set(state.DB.lines.map(l=>String(l.line).trim()))]
+      .concat(KNOWN_LINES).filter((v,i,a)=>a.indexOf(v)===i)
+      .sort((a,b)=>Number(a)-Number(b));
+    lineSel.innerHTML='<option value="">Toutes lignes</option>'+lines.map(ln=>`<option value="${ln}">Ligne ${ln}</option>`).join('');
     updateDirOptions();
   }
   function updateDirOptions(){
-    const ln = lineSel.value;
-    const dirs = [];
-    state.DB.lines.filter(l=>!ln || String(l.line).trim()===ln)
+    const ln=lineSel.value; const dirs=[];
+    state.DB.lines.filter(l=>!ln||String(l.line).trim()===ln)
       .forEach(l=>l.directions.forEach(d=>dirs.push(d.direction)));
-    dirSel.innerHTML = '<option value="">Tous sens</option>' +
-      [...new Set(dirs)].map(d=>`<option value="${d}">${d}</option>`).join('');
+    dirSel.innerHTML='<option value="">Tous sens</option>'+[...new Set(dirs)].map(d=>`<option value="${d}">${d}</option>`).join('');
   }
-
   function filterStops(){
-    const q = (qInput.value||'').toLowerCase().trim();
-    const ln = lineSel.value;
-    const dir = dirSel.value;
-    const out = [];
+    const q=(qInput.value||'').toLowerCase().trim(); const ln=lineSel.value; const dir=dirSel.value; const out=[];
     state.DB.lines.forEach(line=>{
-      const lnStr = String(line.line).trim();
-      if(ln && lnStr!==ln) return;
-      line.directions.forEach(d=>{
-        if(dir && d.direction!==dir) return;
-        d.stops.forEach(s=>{
-          if(!q || s.name.toLowerCase().includes(q)){
-            out.push({ line: lnStr, dir: d.direction, stop: s.name, times: s.times });
-          }
-        });
+      const lnStr=String(line.line).trim(); if(ln&&lnStr!==ln) return;
+      line.directions.forEach(d=>{ if(dir&&d.direction!==dir) return;
+        d.stops.forEach(s=>{ if(!q||s.name.toLowerCase().includes(q)){ out.push({line:lnStr,dir:d.direction,stop:s.name,times:s.times}); }});
       });
-    });
-    return out;
+    }); return out;
   }
-
   function render(){
-    const items = filterStops().slice(0, 50);
-    results.innerHTML = '';
-    if(!items.length){
-      results.innerHTML = '<div class="card"><div class="meta">Aucun résultat — essaye un autre arrêt ou choisis une ligne.</div></div>';
-      return;
-    }
+    const items=filterStops().slice(0,50); results.innerHTML='';
+    if(!items.length){ results.innerHTML='<div class="card"><div class="meta">Aucun résultat — essaye un autre arrêt ou choisis une ligne.</div></div>'; return; }
     items.forEach(it=>{
-      const lineDelay = getLineDelay(it.line);
-      const nextsPlanned = nextTimes(it.times, 4);
-      const nextsAdjusted = nextsPlanned.map(t => addMinutes(t, lineDelay));
-      const deltas = nextsAdjusted.map(t => minsFromNow(t));
-      const grid = nextsAdjusted.map((t,i)=>`
-        <div>${t}</div>
-        <div style="text-align:right">${deltas[i]} min</div>
-        <div>${badgeHTML(lineDelay)}</div>
-      `).join('');
-      const el = document.createElement('div'); el.className='card';
-      el.innerHTML = `<h3>Ligne ${it.line} — ${it.stop}</h3>
-        <div class="meta">${it.dir}</div>
-        <div class="grid">${grid}</div>`;
+      const lineDelay=getLineDelay(it.line);
+      const nextsPlanned=nextTimes(it.times,4);
+      const nextsAdjusted=nextsPlanned.map(t=>addMinutes(t,lineDelay));
+      const deltas=nextsAdjusted.map(t=>minsFromNow(t));
+      const grid=nextsAdjusted.map((t,i)=>`
+        <div>${t}</div><div style="text-align:right">${deltas[i]} min</div><div>${badgeHTML(lineDelay)}</div>`).join('');
+      const el=document.createElement('div'); el.className='card';
+      el.innerHTML=`<h3>Ligne ${it.line} — ${it.stop}</h3><div class="meta">${it.dir}</div><div class="grid">${grid}</div>`;
       results.appendChild(el);
     });
   }
-
   async function fetchDelays(){
-    try{
-      const r = await fetch(DELAYS_API, { cache:'no-store' });
-      if(r.ok){
-        state.DELAYS = await r.json();
-        computeKPIs();
-        render();
-      }
-    }catch(e){}
+    try{ const r=await fetch(DELAYS_API,{cache:'no-store'}); if(r.ok){ state.DELAYS=await r.json(); computeKPIs(); render(); } }catch(e){}
   }
-
-  // Essaie plusieurs noms/chemins pour le JSON (au cas où)
-  async function fetchFirstOk(urls){
-    for(const url of urls){
-      try{
-        const r = await fetch(url, { cache:'no-store' });
-        if(r.ok){ return await r.json(); }
-      }catch(e){}
-    }
-    throw new Error('Horaires JSON introuvables');
-  }
-
   async function init(){
     try{
-      state.DB = await fetchFirstOk([
-        './zekst_bus.json','./zest_bus.json','/zekst_bus.json','/zest_bus.json'
-      ]);
-      state.DB.lines.forEach(l => { l.line = String(l.line).trim(); });
-
-      populateSelectors();
-      render();
-
-      await fetchDelays();
-      setInterval(fetchDelays, 120000);
-
-      qInput.addEventListener('input', render);
-      lineSel.addEventListener('change', ()=>{ updateDirOptions(); render(); });
-      dirSel.addEventListener('change', render);
-    }catch(err){
-      console.error(err);
-      results.innerHTML = '<div class="card"><div class="meta">Erreur de chargement. Vérifie que <code>zekst_bus.json</code> est à côté de <code>index.html</code>.</div></div>';
-    }
+      const dbRes=await fetch('./zekst_bus.json',{cache:'no-store'}); if(!dbRes.ok) throw new Error('Chargement zekst_bus.json: '+dbRes.status);
+      state.DB=await dbRes.json(); state.DB.lines.forEach(l=>{ l.line=String(l.line).trim(); });
+      populateSelectors(); render(); await fetchDelays(); setInterval(fetchDelays,120000);
+      qInput.addEventListener('input',render); lineSel.addEventListener('change',()=>{updateDirOptions();render();}); dirSel.addEventListener('change',render);
+    }catch(err){ console.error(err); results.innerHTML='<div class="card"><div class="meta">Erreur de chargement. Vérifie que <code>zekst_bus.json</code> est à côté de <code>index.html</code>.</div></div>'; }
   }
-  window.addEventListener('DOMContentLoaded', init);
+  window.addEventListener('DOMContentLoaded',init);
 })();
 </script>
 </body>
