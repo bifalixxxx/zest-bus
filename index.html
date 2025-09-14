@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Zekst Bus – horaires</title>
+  <title>Zest Bus – horaires</title>
   <style>
     :root{--bg:#0a0a0b;--card:#131317;--text:#fafafc;--subtle:#a9abb6;--pill:#1e1e25}
     *{box-sizing:border-box}body{margin:0;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;background:#0b0c12;color:var(--text)}
@@ -28,7 +28,7 @@
 <body>
 <header>
   <img src="logo.png" alt="logo" onerror="this.style.display='none'"/>
-  <div><div style="font-weight:800">Zekst Bus</div><div style="color:#94a3b8;font-size:12px">Horaires & prochains passages</div></div>
+  <div><div style="font-weight:800">Zest Bus</div><div style="color:#94a3b8;font-size:12px">Horaires & prochains passages</div></div>
 </header>
 <main>
   <section class="search">
@@ -45,17 +45,19 @@
   </section>
   <div id="results" class="cards"></div>
 </main>
-<footer>© Zekst — JSON statique + retards appliqués.</footer>
+<footer>© Zest — JSON statique + retards appliqués.</footer>
 
 <script>
 (() => {
-  // ✅ URL de ton API Vercel (TomTom/Waze derrière)
+  // URL de ton API (Vercel)
   const DELAYS_API = "https://zest-bus.vercel.app/api/delays";
 
   const state = { DB:null, DELAYS:{} };
   const $ = sel => document.querySelector(sel);
   const lineSel = $('#line'), dirSel = $('#dir'), qInput = $('#q'), results = $('#results');
   const avgDelayEl = $('#avgDelay'), mostPertEl = $('#mostPert');
+
+  const KNOWN_LINES = ["11","12","13","18","24"];
 
   function pad(n){ return n<10 ? '0'+n : ''+n; }
   function minsFromNow(hhmm){
@@ -80,6 +82,12 @@
     return pick.map(tm=>pad(Math.floor(tm/60))+':'+pad(tm%60));
   }
 
+  // cache le badge quand +0
+  function badgeHTML(delay){
+    if (!delay || delay <= 0) return '';
+    return `<span class="badge red">+${delay}</span>`;
+  }
+
   function getLineDelay(lineNumber){
     const v = state.DELAYS[lineNumber];
     return Number.isFinite(v) ? v : 0;
@@ -94,7 +102,11 @@
   }
 
   function populateSelectors(){
-    const lines = [...new Set(state.DB.lines.map(l=>l.line))].sort();
+    // liste unique + tri numérique
+    const lines = [...new Set(state.DB.lines.map(l => String(l.line).trim()))]
+      .concat(KNOWN_LINES) // s'assure que 18/24 existent au menu même si pas d'horaires chargés
+      .filter((v,i,a)=>a.indexOf(v)===i)
+      .sort((a,b)=> Number(a) - Number(b));
     lineSel.innerHTML = '<option value="">Toutes lignes</option>' +
       lines.map(ln=>`<option value="${ln}">Ligne ${ln}</option>`).join('');
     updateDirOptions();
@@ -102,7 +114,8 @@
   function updateDirOptions(){
     const ln = lineSel.value;
     const dirs = [];
-    state.DB.lines.filter(l=>!ln || l.line===ln).forEach(l=>l.directions.forEach(d=>dirs.push(d.direction)));
+    state.DB.lines.filter(l=>!ln || String(l.line).trim()===ln)
+      .forEach(l=>l.directions.forEach(d=>dirs.push(d.direction)));
     dirSel.innerHTML = '<option value="">Tous sens</option>' +
       [...new Set(dirs)].map(d=>`<option value="${d}">${d}</option>`).join('');
   }
@@ -113,12 +126,13 @@
     const dir = dirSel.value;
     const out = [];
     state.DB.lines.forEach(line=>{
-      if(ln && line.line!==ln) return;
+      const lnStr = String(line.line).trim();
+      if(ln && lnStr!==ln) return;
       line.directions.forEach(d=>{
         if(dir && d.direction!==dir) return;
         d.stops.forEach(s=>{
           if(!q || s.name.toLowerCase().includes(q)){
-            out.push({ line: line.line, dir: d.direction, stop: s.name, times: s.times });
+            out.push({ line: lnStr, dir: d.direction, stop: s.name, times: s.times });
           }
         });
       });
@@ -141,7 +155,7 @@
       const grid = nextsAdjusted.map((t,i)=>`
         <div>${t}</div>
         <div style="text-align:right">${deltas[i]} min</div>
-        <div><span class="badge red">+${lineDelay}</span></div>
+        <div>${badgeHTML(lineDelay)}</div>
       `).join('');
       const el = document.createElement('div'); el.className='card';
       el.innerHTML = `<h3>Ligne ${it.line} — ${it.stop}</h3>
@@ -167,6 +181,9 @@
       const dbRes = await fetch('./zekst_bus.json', { cache:'no-store' });
       if(!dbRes.ok) throw new Error('Chargement zekst_bus.json: '+dbRes.status);
       state.DB = await dbRes.json();
+
+      // 🧽 Normalise: numéro de ligne en string
+      state.DB.lines.forEach(l => { l.line = String(l.line).trim(); });
 
       populateSelectors();
       render();
