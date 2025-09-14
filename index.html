@@ -23,9 +23,11 @@
     .badge.red{background:#3b0f12;color:#fecaca;border:1px solid #7f1d1d}
     .pill{display:inline-flex;gap:8px;align-items:center;padding:6px 10px;border-radius:999px;background:var(--pill);font-size:12px}
     footer{color:#7b7f8f;font-size:12px;text-align:center;padding:20px 10px}
+    .maintenance{background:#b91c1c;color:#fff;padding:12px;text-align:center;font-weight:700;font-size:18px}
   </style>
 </head>
 <body>
+<div class="maintenance">⚠️ Le site est en maintenance — Les lignes 24 et 18 peuvent ne pas s'afficher</div>
 <header>
   <img src="logo.png" alt="logo" onerror="this.style.display='none'"/>
   <div><div style="font-weight:800">Zest Bus</div><div style="color:#94a3b8;font-size:12px">Horaires & prochains passages</div></div>
@@ -49,7 +51,7 @@
 
 <script>
 (() => {
-  // URL de ton API (Vercel)
+  // URL API Vercel
   const DELAYS_API = "https://zest-bus.vercel.app/api/delays";
 
   const state = { DB:null, DELAYS:{} };
@@ -81,17 +83,8 @@
     const pick=(future.length?future:day).slice(0,limit);
     return pick.map(tm=>pad(Math.floor(tm/60))+':'+pad(tm%60));
   }
-
-  // cache le badge quand +0
-  function badgeHTML(delay){
-    if (!delay || delay <= 0) return '';
-    return `<span class="badge red">+${delay}</span>`;
-  }
-
-  function getLineDelay(lineNumber){
-    const v = state.DELAYS[lineNumber];
-    return Number.isFinite(v) ? v : 0;
-  }
+  function badgeHTML(delay){ if (!delay || delay <= 0) return ''; return `<span class="badge red">+${delay}</span>`; }
+  function getLineDelay(lineNumber){ const v = state.DELAYS[lineNumber]; return Number.isFinite(v) ? v : 0; }
   function computeKPIs(){
     const entries = Object.entries(state.DELAYS).filter(([k,v])=>Number.isFinite(v));
     if(!entries.length){ avgDelayEl.textContent='0 min'; mostPertEl.textContent='—'; return; }
@@ -102,9 +95,8 @@
   }
 
   function populateSelectors(){
-    // liste unique + tri numérique
     const lines = [...new Set(state.DB.lines.map(l => String(l.line).trim()))]
-      .concat(KNOWN_LINES) // s'assure que 18/24 existent au menu même si pas d'horaires chargés
+      .concat(KNOWN_LINES)
       .filter((v,i,a)=>a.indexOf(v)===i)
       .sort((a,b)=> Number(a) - Number(b));
     lineSel.innerHTML = '<option value="">Toutes lignes</option>' +
@@ -176,20 +168,29 @@
     }catch(e){}
   }
 
+  // Essaie plusieurs noms/chemins pour le JSON (au cas où)
+  async function fetchFirstOk(urls){
+    for(const url of urls){
+      try{
+        const r = await fetch(url, { cache:'no-store' });
+        if(r.ok){ return await r.json(); }
+      }catch(e){}
+    }
+    throw new Error('Horaires JSON introuvables');
+  }
+
   async function init(){
     try{
-      const dbRes = await fetch('./zekst_bus.json', { cache:'no-store' });
-      if(!dbRes.ok) throw new Error('Chargement zekst_bus.json: '+dbRes.status);
-      state.DB = await dbRes.json();
-
-      // 🧽 Normalise: numéro de ligne en string
+      state.DB = await fetchFirstOk([
+        './zekst_bus.json','./zest_bus.json','/zekst_bus.json','/zest_bus.json'
+      ]);
       state.DB.lines.forEach(l => { l.line = String(l.line).trim(); });
 
       populateSelectors();
       render();
 
-      await fetchDelays();               // premier chargement
-      setInterval(fetchDelays, 120000);  // refresh toutes les 2 min
+      await fetchDelays();
+      setInterval(fetchDelays, 120000);
 
       qInput.addEventListener('input', render);
       lineSel.addEventListener('change', ()=>{ updateDirOptions(); render(); });
