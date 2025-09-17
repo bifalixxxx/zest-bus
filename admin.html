@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Zest Bus — Admin</title>
+<style>
+  :root{--bg:#0a0a0b;--card:#131317;--text:#fafafc;--sub:#a9abb6;--pill:#1e1e25}
+  *{box-sizing:border-box} body{margin:0;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;background:#0b0c12;color:var(--text)}
+  header{padding:14px 16px;border-bottom:1px solid #1f2030;background:#0b0c12;position:sticky;top:0;z-index:10}
+  main{max-width:900px;margin:0 auto;padding:16px}
+  .card{background:var(--card);border:1px solid #232437;border-radius:16px;padding:14px;margin-bottom:16px}
+  .pill{display:inline-flex;gap:8px;align-items:center;padding:6px 10px;border-radius:999px;background:var(--pill);font-size:12px}
+  input,select,textarea{padding:10px;border-radius:10px;border:1px solid #26283a;background:#0f0f15;color:var(--text)}
+  button{padding:10px 14px;border-radius:10px;border:1px solid #26283a;background:#1e293b;color:#e5e7eb;cursor:pointer}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+  .bad{color:#fecaca}
+</style>
+</head>
+<body>
+<header>
+  <div style="font-weight:800">Zest Bus — Admin</div>
+  <div style="color:#94a3b8;font-size:12px">Contrôle retards & annonce</div>
+</header>
+<main>
+  <div id="auth" class="card">
+    <div style="margin-bottom:8px">🔐 Connexion admin</div>
+    <div class="row">
+      <input id="token" placeholder="Admin token (x-admin-token)" style="min-width:260px"/>
+      <button id="saveTok">Se connecter</button>
+      <span id="authMsg" class="bad"></span>
+    </div>
+  </div>
+
+  <div id="panel" style="display:none">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h3 style="margin:0">Retards</h3>
+        <button id="refresh">Rafraîchir</button>
+      </div>
+      <div class="row" style="margin:8px 0">
+        <label class="pill">Mode
+          <select id="mode" style="margin-left:8px">
+            <option value="auto">Auto (TomTom)</option>
+            <option value="manual">Manuel</option>
+          </select>
+        </label>
+        <label class="pill">Multiplicateur
+          <input id="mult" type="number" step="0.1" min="0.1" value="1" style="width:90px;margin-left:8px"/>
+        </label>
+        <button id="save" class="pill">Enregistrer</button>
+        <button id="reset" class="pill">Reset manuel</button>
+      </div>
+      <div id="curDelays" style="font-size:13px;color:#a9abb6;margin-bottom:8px">–</div>
+      <div id="manualGrid" class="grid"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px 0">Annonce (bandeau)</h3>
+      <textarea id="annText" rows="3" style="width:100%"></textarea>
+      <div class="row" style="margin-top:8px">
+        <label class="pill">Visible <input id="annVis" type="checkbox" checked style="margin-left:6px"/></label>
+        <button id="saveAnn">Mettre à jour</button>
+      </div>
+      <div id="annInfo" style="color:#a9abb6;font-size:13px;margin-top:6px">–</div>
+    </div>
+  </div>
+</main>
+
+<script>
+const LINES = ["11","12","13","18","24"];
+const $ = s => document.querySelector(s);
+const tokInput = $('#token'), saveTokBtn = $('#saveTok'), authMsg = $('#authMsg');
+const panel = $('#panel'); const modeSel = $('#mode'), multInp = $('#mult');
+const manualGrid = $('#manualGrid'), curDelays = $('#curDelays');
+const saveBtn = $('#save'), resetBtn = $('#reset'), refreshBtn = $('#refresh');
+const annText = $('#annText'), annVis = $('#annVis'), saveAnn = $('#saveAnn'), annInfo = $('#annInfo');
+
+function getTok(){ return localStorage.getItem('adm_tok') || ''; }
+function setTok(t){ localStorage.setItem('adm_tok', t||''); }
+
+function buildManualInputs(existing){
+  manualGrid.innerHTML='';
+  LINES.forEach(l=>{
+    const v = existing && existing[l] !== undefined ? existing[l] : 0;
+    const box = document.createElement('div');
+    box.className='card';
+    box.style.padding='10px';
+    box.innerHTML = `<div style="font-weight:700;margin-bottom:6px">Ligne ${l}</div>
+      <input type="number" min="0" value="${v}" data-line="${l}" style="width:100%"/>`;
+    manualGrid.appendChild(box);
+  });
+}
+
+async function fetchJSON(url){
+  const r = await fetch(url, { cache:'no-store' });
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  return r.json();
+}
+async function postJSON(url, body){
+  const r = await fetch(url, {
+    method:'POST',
+    headers:{ 'content-type':'application/json', 'x-admin-token': getTok() },
+    body: JSON.stringify(body||{})
+  });
+  if(!r.ok){ const t=await r.text().catch(()=> ''); throw new Error('POST '+r.status+' '+t); }
+  return r.json();
+}
+
+async function load(){
+  try{
+    const d = await fetchJSON('/api/delays');
+    modeSel.value = d.mode || 'auto';
+    multInp.value = d.multiplier || 1;
+    curDelays.textContent = 'Retards effectifs: ' + JSON.stringify(d.delays);
+  }catch(e){ curDelays.textContent='(Erreur chargement retards)'; }
+  try{
+    const a = await fetchJSON('/api/announcement');
+    annText.value = a.text || '';
+    annVis.checked = !!a.visible;
+    annInfo.textContent = 'Annonce actuelle: ' + (a.visible? 'VISIBLE' : 'MASQUÉE');
+  }catch(e){ annInfo.textContent='(Erreur chargement annonce)'; }
+  // Construire inputs manuels avec les valeurs actuelles (on met 0 par défaut)
+  buildManualInputs({});
+}
+
+saveTokBtn.addEventListener('click', ()=>{
+  const t = tokInput.value.trim();
+  if(!t){ authMsg.textContent='Entre un token.'; return; }
+  setTok(t); authMsg.textContent='OK, connecté.'; panel.style.display='block';
+});
+resetBtn.addEventListener('click', async ()=>{
+  if(!confirm('Supprimer tous les retards manuels ?')) return;
+  try{ await postJSON('/api/delays', { clearManual:true }); alert('OK'); }catch(e){ alert('Erreur'); }
+});
+saveBtn.addEventListener('click', async ()=>{
+  // collect manual values
+  const manualInputs = Array.from(manualGrid.querySelectorAll('input[data-line]'));
+  const manual = {}; manualInputs.forEach(i=> manual[i.dataset.line] = Number(i.value||0) );
+  try{
+    await postJSON('/api/delays', { mode: modeSel.value, multiplier: Number(multInp.value||1), manual });
+    alert('Réglages enregistrés');
+    await load();
+  }catch(e){ alert('Erreur: token invalide ?'); }
+});
+refreshBtn.addEventListener('click', load);
+saveAnn.addEventListener('click', async ()=>{
+  try{ await postJSON('/api/announcement', { text: annText.value, visible: annVis.checked }); alert('Annonce mise à jour'); }
+  catch(e){ alert('Erreur: token invalide ?'); }
+});
+
+(function init(){
+  const t=getTok(); if(t){ tokInput.value=t; panel.style.display='block'; }
+  load();
+})();
+</script>
+</body>
+</html>
