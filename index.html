@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Zest Bus – horaires</title>
 
-  <!-- Google AdSense (validation) -->
+  <!-- Google AdSense (validation + auto-ads) -->
   <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5005112174057245" crossorigin="anonymous"></script>
 
   <style>
@@ -28,8 +28,9 @@
     .badge{padding:2px 6px;border-radius:8px;font-size:12px;background:#1f273a;color:#cbd5e1}
     .badge.red{background:#3b0f12;color:#fecaca;border:1px solid #7f1d1d}
     .pill{display:inline-flex;gap:8px;align-items:center;padding:6px 10px;border-radius:999px;background:var(--pill);font-size:12px}
-    .banner{background:#991b1b;color:#fff;text-align:center;padding:10px 12px;font-weight:700}
+    .banner{background:#991b1b;color:#fff;text-align:center;padding:10px 12px;font-weight:700;display:none}
     footer{color:#7b7f8f;font-size:12px;text-align:center;padding:20px 10px}
+    .disclaimer{color:#fecaca;background:#3b0f12;border:1px solid #7f1d1d;border-radius:10px;padding:10px;max-width:960px;margin:10px auto 0}
   </style>
 </head>
 <body>
@@ -43,8 +44,7 @@
 </header>
 
 <main>
-  <!-- bandeau optionnel : modifie le texte si besoin -->
-  <div id="topBanner" class="banner" style="display:none;"></div>
+  <div id="topBanner" class="banner"></div>
 
   <section class="search">
     <div class="row">
@@ -61,46 +61,32 @@
 
   <div id="results" class="cards"></div>
 
-  <!-- Bloc pub Google responsive -->
   <ins class="adsbygoogle"
        style="display:block; text-align:center; margin:20px auto;"
        data-ad-client="ca-pub-5005112174057245"
        data-ad-slot="1234567890"
        data-ad-format="auto"
        data-full-width-responsive="true"></ins>
-  <script>
-    try{ (adsbygoogle=window.adsbygoogle||[]).push({}); }catch(e){}
-  </script>
-
+  <script>try{(adsbygoogle=window.adsbygoogle||[]).push({});}catch(e){}</script>
 </main>
 
 <footer>
-  <div>© 2025 — Ce site est un projet étudiant et n’a aucun lien avec la société Zest Bus/Keolis.</div>
+  <div class="disclaimer">© 2025 — Ce site est un projet étudiant et n’a aucun lien avec la société Zest Bus/Keolis.</div>
   <div>JSON statique + retards appliqués.</div>
 </footer>
 
 <script>
 (() => {
-  // URL de l’API Vercel (retards)
-  const DELAYS_API = "https://zest-bus.vercel.app/api/delays";
+  // APIs
+  const DELAYS_API = "/api/delays";       // renvoie soit { "11":n,... } soit { delays:{...} }
+  const OVERRIDES_API = "/api/overrides"; // pour récupérer banner/mode/multiplicateur (GET public)
 
-  // Optionnel : message d’info trafic en haut (laisser "" pour cacher)
-  const INFO_MSG = ""; 
-  if (INFO_MSG) {
-    const b = document.getElementById('topBanner');
-    b.textContent = INFO_MSG;
-    b.style.display = 'block';
-  }
+  const state = { DB:null, DELAYS:{}, OV:{ banner:"" } };
+  const $ = s => document.querySelector(s);
+  const results = $('#results'), qInput = $('#q'), lineSel = $('#line'), dirSel = $('#dir');
+  const avgDelayEl = $('#avgDelay'), mostPertEl = $('#mostPert'), bannerEl = $('#topBanner');
 
-  const state = { DB:null, DELAYS:{} };
-  const $ = sel => document.querySelector(sel);
-  const lineSel = $('#line'), dirSel = $('#dir'), qInput = $('#q'), results = $('#results');
-  const avgDelayEl = $('#avgDelay'), mostPertEl = $('#mostPert');
-
-  // on force l’apparition de toutes les lignes dans le menu
   const KNOWN_LINES = ["11","12","13","18","24"];
-
-  // helpers
   const pad = n => n<10 ? '0'+n : ''+n;
 
   function minsFromNow(hhmm){
@@ -108,13 +94,13 @@
     const [h,m]=hhmm.split(':').map(Number);
     const dt=new Date(now); dt.setHours(h,m,0,0);
     let diff=Math.round((dt-now)/60000);
-    if(diff<-720) diff+=1440;       // si le prochain est le lendemain
-    return Math.max(0, diff);       // ⛔️ jamais négatif à l’affichage
+    if(diff<-720) diff+=1440;
+    return Math.max(0, diff); // affichage jamais négatif
   }
   function addMinutes(hhmm, add){
     const [h,m]=hhmm.split(':').map(Number);
     let total=h*60+m+add;
-    total = (total%1440+1440)%1440;
+    total=(total%1440+1440)%1440;
     return pad(Math.floor(total/60))+':'+pad(total%60);
   }
   function nextTimes(times, limit=4){
@@ -125,37 +111,44 @@
     return pick.map(tm=>pad(Math.floor(tm/60))+':'+pad(tm%60));
   }
 
-  const badgeHTML = delay => (delay>0 ? `<span class="badge red">+${delay}</span>` : '');
-
-  function getLineDelay(lineNumber){
-    const v = state.DELAYS[lineNumber];
-    return Number.isFinite(v) ? v : 0;
+  function badgeHTML(delay){
+    const v = Number(delay)||0;
+    const cls = v>0 ? 'badge red' : 'badge';
+    return `<span class="${cls}">+${v}</span>`;
   }
+
+  function getLineDelay(line){
+    const base = Number(state.DELAYS[line])||0;
+    const m = Number(state.OV.multiplier||1);
+    if (state.OV.mode === 'manual') {
+      const man = Number(state.OV.manual?.[line]);
+      return Number.isFinite(man) ? man : 0;
+    }
+    return Math.round(base * (m||1));
+  }
+
   function computeKPIs(){
-    const entries = Object.entries(state.DELAYS).filter(([k,v])=>Number.isFinite(v));
+    const entries = Object.keys(state.DELAYS).map(k=>[k, getLineDelay(k)]);
     if(!entries.length){ avgDelayEl.textContent='0 min'; mostPertEl.textContent='—'; return; }
-    const avg = Math.round(entries.reduce((a,[_k,v])=>a+v,0)/entries.length);
-    const max = entries.reduce((best, cur)=> cur[1]>best[1]?cur:best);
-    avgDelayEl.textContent = avg+' min';
+    const avg = Math.round(entries.reduce((a,[,v])=>a+v,0)/entries.length);
+    const max = entries.reduce((b,c)=> c[1]>b[1]?c:b, ["—",0]);
+    avgDelayEl.textContent = `${avg} min`;
     mostPertEl.textContent = `Ligne ${max[0]} (+${max[1]} min)`;
   }
 
   function populateSelectors(){
-    // on combine ce qu’il y a dans le JSON avec la liste connue pour forcer 18 et 24
     const lines = [...new Set([
-      ...state.DB.lines.map(l => String(l.line).trim()),
+      ...state.DB.lines.map(l=>String(l.line).trim()),
       ...KNOWN_LINES
     ])].sort((a,b)=>Number(a)-Number(b));
     lineSel.innerHTML = '<option value="">Toutes lignes</option>' +
       lines.map(ln=>`<option value="${ln}">Ligne ${ln}</option>`).join('');
     updateDirOptions();
   }
-
   function updateDirOptions(){
     const ln = lineSel.value;
-    const dirs = [];
-    state.DB.lines
-      .filter(l=>!ln || String(l.line).trim()===ln)
+    const dirs=[];
+    state.DB.lines.filter(l=>!ln || String(l.line).trim()===ln)
       .forEach(l=>l.directions.forEach(d=>dirs.push(d.direction)));
     dirSel.innerHTML = '<option value="">Tous sens</option>' +
       [...new Set(dirs)].map(d=>`<option value="${d}">${d}</option>`).join('');
@@ -163,11 +156,10 @@
 
   function filterStops(){
     const q = (qInput.value||'').toLowerCase().trim();
-    const ln = lineSel.value;
-    const dir = dirSel.value;
-    const out = [];
+    const ln = lineSel.value, dir = dirSel.value;
+    const out=[];
     state.DB.lines.forEach(line=>{
-      const lnStr = String(line.line).trim();
+      const lnStr=String(line.line).trim();
       if(ln && lnStr!==ln) return;
       line.directions.forEach(d=>{
         if(dir && d.direction!==dir) return;
@@ -182,26 +174,25 @@
   }
 
   function render(){
-    const items = filterStops().slice(0, 50);
-    results.innerHTML = '';
+    const items = filterStops().slice(0,50);
+    results.innerHTML='';
     if(!items.length){
-      results.innerHTML = '<div class="card"><div class="meta">Aucun résultat — essaye un autre arrêt ou choisis une ligne.</div></div>';
+      results.innerHTML='<div class="card"><div class="meta">Aucun résultat — essaye un autre arrêt ou choisis une ligne.</div></div>';
       return;
     }
     items.forEach(it=>{
-      const lineDelay = getLineDelay(it.line);          // minutes de retard pour la ligne
-      const nextsPlanned = nextTimes(it.times, 4);      // prochains passages planifiés
-      const nextsAdjusted = nextsPlanned.map(t => addMinutes(t, lineDelay)); // + retard
-      const deltas = nextsAdjusted.map(t => minsFromNow(t));                 // dans X min
+      const delay = getLineDelay(it.line);
+      const nextPlan = nextTimes(it.times,4);
+      const nextAdj  = nextPlan.map(t=>addMinutes(t, delay));
+      const minsLeft = nextAdj.map(t=>minsFromNow(t));
 
-      const grid = nextsAdjusted.map((t,i)=>`
+      const grid = nextAdj.map((t,i)=>`
         <div>${t}</div>
-        <div style="text-align:right">${deltas[i]} min</div>
-        <div>${badgeHTML(lineDelay)}</div>
+        <div style="text-align:right">${minsLeft[i]} min</div>
+        <div>${badgeHTML(delay)}</div>
       `).join('');
 
-      const el = document.createElement('div');
-      el.className = 'card';
+      const el=document.createElement('div'); el.className='card';
       el.innerHTML = `<h3>Ligne ${it.line} — ${it.stop}</h3>
         <div class="meta">${it.dir}</div>
         <div class="grid">${grid}</div>`;
@@ -212,14 +203,30 @@
   async function fetchDelays(){
     try{
       const r = await fetch(DELAYS_API, { cache:'no-store' });
-      if(r.ok){
-        state.DELAYS = await r.json();
-        computeKPIs();
-        render();
-      }
+      const j = r.ok ? await r.json() : {};
+      // prend en charge {delays:{...}} ou simple map
+      const map = (j && typeof j==='object' && j.delays) ? j.delays : j;
+      const out = {};
+      ["11","12","13","18","24"].forEach(k=>{
+        const v = Number(map?.[k]);
+        out[k] = Number.isFinite(v) ? v : 0;
+      });
+      state.DELAYS = out;
+      computeKPIs(); render();
     }catch(e){
-      // silencieux
+      state.DELAYS = {"11":0,"12":0,"13":0,"18":0,"24":0};
+      computeKPIs(); render();
     }
+  }
+
+  async function fetchOverrides(){
+    try{
+      const r = await fetch(OVERRIDES_API, { cache:'no-store' });
+      if(!r.ok) return;
+      const ov = await r.json();
+      state.OV = Object.assign({ mode:'auto', multiplier:1, manual:{}, banner:'' }, ov||{});
+      if(state.OV.banner){ bannerEl.textContent = state.OV.banner; bannerEl.style.display='block'; }
+    }catch(_){}
   }
 
   async function init(){
@@ -227,15 +234,12 @@
       const dbRes = await fetch('./zekst_bus.json', { cache:'no-store' });
       if(!dbRes.ok) throw new Error('Chargement zekst_bus.json: '+dbRes.status);
       state.DB = await dbRes.json();
+      state.DB.lines.forEach(l=>l.line=String(l.line).trim());
 
-      // normalise
-      state.DB.lines.forEach(l => { l.line = String(l.line).trim(); });
-
-      populateSelectors();
-      render();
-
-      await fetchDelays();               // 1er fetch
-      setInterval(fetchDelays, 120000);  // refresh toutes les 2 min
+      await fetchOverrides();      // bandeau + overrides (si dispo)
+      populateSelectors(); render();
+      await fetchDelays();         // retards initiaux
+      setInterval(fetchDelays, 120000);
 
       qInput.addEventListener('input', render);
       lineSel.addEventListener('change', ()=>{ updateDirOptions(); render(); });
@@ -245,7 +249,6 @@
       results.innerHTML = '<div class="card"><div class="meta">Erreur de chargement. Vérifie que <code>zekst_bus.json</code> est à côté de <code>index.html</code>.</div></div>';
     }
   }
-
   window.addEventListener('DOMContentLoaded', init);
 })();
 </script>
