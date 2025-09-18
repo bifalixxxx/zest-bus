@@ -1,8 +1,8 @@
 let bannerData = {
   status: "YES", // YES / NO
   color: "blue", // green/red/blue
-  message: "Info trafic : grève du 18 septembre, lignes 18 et 24 perturbées.",
-  subMessage: "Les mises à jour seront effectuées manuellement."
+  message: "8:14 : Pour le moment, le trafic ferroviaire est stable, aucun retard prévu sur le réseau.",
+  subMessage: "Grève du 18 septembre, lignes 18 et 24 perturbées"
 };
 
 export default function handler(req, res) {
