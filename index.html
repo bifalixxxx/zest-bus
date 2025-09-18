@@ -8,9 +8,9 @@
     :root{--bg:#0a0a0b;--card:#131317;--text:#fafafc;--subtle:#a9abb6;--pill:#1e1e25}
     *{box-sizing:border-box}
     body{margin:0;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;background:#0b0c12;color:var(--text)}
-    header{position:sticky;top:0;display:flex;gap:12px;align-items:center;padding:14px 16px;background:rgba(10,10,11,.85);backdrop-filter:blur(8px);border-bottom:1px solid #1f2030;z-index:10}
+    header{position:sticky;top:0;display:flex;gap:12px;align-items:center;padding:14px 16px;background:rgba(10,10,11,.85);backdrop-filter:blur(8px);border-bottom:1px solid #1f2030;z-index:20}
     header img{width:40px;height:40px;border-radius:10px;object-fit:cover}
-    .announcement{background:#7f1d1d;color:#fff;padding:10px;text-align:center;font-weight:bold;font-size:14px}
+    #topBanner{display:none}
     main{padding:16px;max-width:960px;margin:0 auto}
     .search{display:grid;gap:10px}
     .row{display:grid;grid-template-columns:1fr;gap:10px}
@@ -19,21 +19,16 @@
     .cards{display:grid;grid-template-columns:1fr;gap:12px;margin-top:18px}
     @media(min-width:900px){.cards{grid-template-columns:1fr 1fr}}
     .card{background:var(--card);border:1px solid #232437;border-radius:16px;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
-    .card h3{margin:0 0 6px 0;font-size:16px}.meta{color:var(--subtle);font-size:13px}
+    .card h3{margin:0 0 6px 0;font-size:16px}
+    .meta{color:var(--subtle);font-size:13px}
     .grid{display:grid;grid-template-columns:1fr auto auto;gap:6px;align-items:center;margin-top:10px}
     .badge{padding:2px 6px;border-radius:8px;font-size:12px;background:#1f273a;color:#cbd5e1}
     .badge.red{background:#3b0f12;color:#fecaca;border:1px solid #7f1d1d}
     .pill{display:inline-flex;gap:8px;align-items:center;padding:6px 10px;border-radius:999px;background:var(--pill);font-size:12px}
     footer{color:#7b7f8f;font-size:12px;text-align:center;padding:20px 10px}
-    footer .warning{color:red;margin-top:6px;font-weight:bold}
   </style>
 </head>
 <body>
-<div class="announcement">
-  ℹ️ Info trafic : en raison de la grève du 18 septembre, les lignes 18 et 24 risquent d’être partiellement surchargées.<br>
-  Afin de vous tenir informés, nous mettrons à jour manuellement les informations trafic.
-</div>
-
 <header>
   <img src="logo.png" alt="logo" onerror="this.style.display='none'"/>
   <div>
@@ -41,6 +36,9 @@
     <div style="color:#94a3b8;font-size:12px">Horaires & prochains passages</div>
   </div>
 </header>
+
+<!-- 🚩 Bannière infos trafic -->
+<div id="topBanner"></div>
 
 <main>
   <section class="search">
@@ -59,19 +57,17 @@
 </main>
 
 <footer>
-  © Zest — JSON statique + retards appliqués.<br>
-  <span class="warning">© 2025 — Ce site est un projet étudiant et n’a aucun lien avec la société Zest Bus/Keolis.</span>
+  © Zest — JSON statique + retards appliqués.<br/>
+  <span style="color:red">© 2025 — Ce site est un projet étudiant et n’a aucun lien avec la société Zest Bus/Keolis.</span>
 </footer>
 
 <script>
 (() => {
   const DELAYS_API = "https://zest-bus.vercel.app/api/delays";
-
   const state = { DB:null, DELAYS:{} };
   const $ = sel => document.querySelector(sel);
   const lineSel = $('#line'), dirSel = $('#dir'), qInput = $('#q'), results = $('#results');
   const avgDelayEl = $('#avgDelay'), mostPertEl = $('#mostPert');
-
   const KNOWN_LINES = ["11","12","13","18","24"];
 
   function pad(n){ return n<10 ? '0'+n : ''+n; }
@@ -96,12 +92,10 @@
     const pick=(future.length?future:day).slice(0,limit);
     return pick.map(tm=>pad(Math.floor(tm/60))+':'+pad(tm%60));
   }
-
   function badgeHTML(delay){
     if (!delay || delay <= 0) return '';
     return `<span class="badge red">+${delay}</span>`;
   }
-
   function getLineDelay(lineNumber){
     const v = state.DELAYS[lineNumber];
     return Number.isFinite(v) ? v : 0;
@@ -114,7 +108,6 @@
     avgDelayEl.textContent = avg+' min';
     mostPertEl.textContent = 'Ligne '+max[0]+' (+'+max[1]+' min)';
   }
-
   function populateSelectors(){
     const lines = [...new Set(state.DB.lines.map(l => String(l.line).trim()))]
       .concat(KNOWN_LINES)
@@ -132,7 +125,6 @@
     dirSel.innerHTML = '<option value="">Tous sens</option>' +
       [...new Set(dirs)].map(d=>`<option value="${d}">${d}</option>`).join('');
   }
-
   function filterStops(){
     const q = (qInput.value||'').toLowerCase().trim();
     const ln = lineSel.value;
@@ -152,7 +144,6 @@
     });
     return out;
   }
-
   function render(){
     const items = filterStops().slice(0, 50);
     results.innerHTML = '';
@@ -177,7 +168,6 @@
       results.appendChild(el);
     });
   }
-
   async function fetchDelays(){
     try{
       const r = await fetch(DELAYS_API, { cache:'no-store' });
@@ -188,7 +178,6 @@
       }
     }catch(e){}
   }
-
   async function init(){
     try{
       const dbRes = await fetch('./zekst_bus.json', { cache:'no-store' });
@@ -208,6 +197,32 @@
     }
   }
   window.addEventListener('DOMContentLoaded', init);
+
+  // 🔵 Bannière dynamique depuis banner.json
+  async function loadBanner() {
+    try {
+      const r = await fetch('./banner.json?ts=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) return;
+      const { status = 'YES', color = 'blue', message = '', subMessage = '' } = await r.json();
+      if (!message && !subMessage) return;
+      const presets = { blue: '#2563eb', green: '#16a34a', red: '#dc2626' };
+      const bg = presets[String(color).toLowerCase()] || color || '#2563eb';
+      const emoji = (String(status).toUpperCase() === 'YES') ? '✅' : '❌';
+      const el = document.getElementById('topBanner');
+      el.style.display = 'block';
+      el.style.background = bg;
+      el.style.color = '#fff';
+      el.style.padding = '10px 12px';
+      el.style.textAlign = 'center';
+      el.style.fontWeight = '700';
+      el.style.borderBottom = '1px solid rgba(0,0,0,.25)';
+      el.innerHTML = `
+        <div>${emoji} ${message}</div>
+        ${subMessage ? `<div style="font-weight:500; opacity:.9; margin-top:4px;">${subMessage}</div>` : ''}
+      `;
+    } catch {}
+  }
+  loadBanner();
 })();
 </script>
 </body>
