@@ -1,113 +1,93 @@
-// api/delays.js — TomTom Traffic → minutes de retard par ligne (Monaco/Menton).
-// Renvoie: { "11": min, "12": min, "13": min, "18": min, "24": min }.
-// Besoin d'une variable d'env: TOMTOM_KEY (Project → Settings → Environment Variables).
+// api/delays.js — TomTom Routing → minutes de retard par ligne (trajet complet)
+// Requiert la variable d'env TOMTOM_KEY sur Vercel
+// Cache mémoire 60s pour limiter les appels
 
-const TOMTOM_KEY = process.env.TOMTOM_KEY;
-const ZOOM = 10;                 // résolution du segment (5..15). 10 = ~100-200m
-const FREE_MAX = 50;             // km/h "freeflow" minimum raisonnable si API retourne 0
-const MAX_LINE_DELAY = 25;       // borne max par ligne (minutes)
-const TIMEOUT_MS = 5000;         // timeout requête TomTom
+const KEY = process.env.TOMTOM_KEY;
 
-// Points représentatifs par ligne (lat,lng). On moyenne les retards sur ces points.
-// Ajuste/ajoute des points si tu veux être plus précis.
-const LINE_POINTS = {
-  "11": [
-    [43.7379, 7.4209], // Pont Ste Dévote
-    [43.7447, 7.4040], // Beausoleil haut
-    [43.7442, 7.4010], // Vers La Turbie
-  ],
-  "12": [
-    [43.7395, 7.4238], // Casino / O.T.
-    [43.7425, 7.4248], // Marché Beausoleil
-    [43.7460, 7.4220], // Moneghetti
-  ],
-  "13": [
-    [43.7405, 7.4205], // Malbousquet / Moneghetti
-    [43.7420, 7.4232], // Crèche/Gymnase
-    [43.7390, 7.4230], // Pont Ste Dévote
-  ],
-  "18": [
-    [43.7385, 7.4246], // Monaco centre
-    [43.7663, 7.4915], // Menton centre
-    [43.7725, 7.4964], // Bord de mer Menton
-  ],
-  "24": [
-    [43.7746, 7.4940], // Carnolès / SNCF
-    [43.7779, 7.5041], // Menton plage
-    [43.7808, 7.5122], // Garavan
-  ],
+// Réglages perception
+const AMPLIFY = 2;          // ex: 2 → ressentis plus forts
+const MIN_IF_CONGESTED = 5; // min si congestion > 0
+const MAX_MIN = 60;         // plafond
+const CACHE_TTL = 60 * 1000;
+let cache = { ts: 0, data: null };
+
+// Itinéraires représentatifs
+const LINE_ROUTES = {
+  "11": { start: [43.7358, 7.4148], end: [43.7272, 7.4010], via: [[43.7398,7.4205],[43.7446,7.4042]] },
+  "12": { start: [43.7393, 7.4276], end: [43.7446, 7.4207], via: [[43.7426,7.4250]] },
+  "13": { start: [43.7420, 7.4232], end: [43.7388, 7.4202], via: [[43.7408,7.4210]] },
+  "18": { start: [43.7385, 7.4246], end: [43.7749, 7.4944], via: [[43.7566,7.4608],[43.7663,7.4915]] },
+  "24": { start: [43.7749, 7.4944], end: [43.7815, 7.5239], via: [[43.7778,7.5043],[43.7806,7.5120]] },
 };
 
-// --- utilitaires ---
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-async function fetchTomTom(point) {
-  const [lat, lng] = point;
-  const url = `https://api.tomtom.com/traffic/services/4/flowSegmentData/absolute/${ZOOM}/json?point=${lat},${lng}&key=${TOMTOM_KEY}`;
-  const ctl = new AbortController();
-  const to = setTimeout(() => ctl.abort(), TIMEOUT_MS);
-  try {
-    const r = await fetch(url, { signal: ctl.signal, cache: 'no-store' });
-    if (!r.ok) throw new Error('TomTom HTTP ' + r.status);
-    return await r.json();
-  } finally {
-    clearTimeout(to);
-  }
+function routeUrl({ start, end, via = [] }) {
+  const fmt = ([lat, lng]) => `${lat},${lng}`;
+  const legs = [fmt(start), ...via.map(fmt), fmt(end)].join(':');
+  const params = new URLSearchParams({
+    key: KEY,
+    traffic: 'true',
+    computeTravelTimeFor: 'all', // travelTimeInSeconds + noTrafficTravelTimeInSeconds
+    avoid: 'unpavedRoads',
+  });
+  return `https://api.tomtom.com/routing/1/calculateRoute/${legs}/json?${params.toString()}`;
 }
 
-function delayFromTomTomJson(data) {
-  // Docs: renvoie entre autres currentTravelTime (s), freeFlowTravelTime (s)
-  const cur = Number(data?.flowSegmentData?.currentTravelTime);
-  let free = Number(data?.flowSegmentData?.freeFlowTravelTime);
-  // garde-fous
-  if (!Number.isFinite(cur) || cur <= 0) return 0;
-  if (!Number.isFinite(free) || free <= 0) {
-    // fallback si freeFlow absent: approx depuis vitesse "freeflow"
-    const len = Number(data?.flowSegmentData?.frcRoadClass) ? 0 : 0; // pas fiable → on évite
-    // par prudence, considère 0
-    free = Math.max(1, Math.round(cur * 0.8));
-  }
-  const deltaSec = Math.max(0, cur - free);
-  return deltaSec / 60; // minutes
-}
+async function fetchDelayForRoute(route) {
+  const r = await fetch(routeUrl(route), { cache: 'no-store' });
+  if (!r.ok) throw new Error('Routing HTTP ' + r.status);
+  const j = await r.json();
+  const sum = j?.routes?.[0]?.summary;
+  const cur = Number(sum?.travelTimeInSeconds || 0);
+  const free = Number(sum?.noTrafficTravelTimeInSeconds || 0);
+  if (!cur || !free) return 0;
 
-async function delayForLine(points) {
-  const deltas = [];
-  for (let i = 0; i < points.length; i++) {
-    try {
-      const json = await fetchTomTom(points[i]);
-      deltas.push(delayFromTomTomJson(json));
-      // petit throttle pour ne pas spammer
-      if (i < points.length - 1) await sleep(150);
-    } catch (_e) {
-      // ignore point en erreur
-    }
-  }
-  if (!deltas.length) return 0;
-  // moyenne robuste (trim 1 valeur extrême si >3 points)
-  deltas.sort((a,b)=>a-b);
-  const arr = deltas.length > 2 ? deltas.slice(1, -1) : deltas;
-  const avg = arr.reduce((a,b)=>a+b,0)/arr.length;
-  return Math.min(MAX_LINE_DELAY, Math.round(avg));
+  // Diff réel en minutes
+  let mins = Math.max(0, Math.round((cur - free) / 60));
+  if (mins > 0) mins = Math.max(MIN_IF_CONGESTED, Math.round(mins * AMPLIFY));
+  return Math.min(MAX_MIN, mins);
 }
 
 export default async function handler(req, res) {
+  // ------- CORS (important pour Hostinger -> Vercel) -------
+  // Si tu veux restreindre à ton domaine, remplace * par "https://theeye.top"
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    // Réponse preflight
+    return res.status(204).end();
+  }
+  // ---------------------------------------------------------
+
   try {
-    if (!TOMTOM_KEY) {
-      // démo si pas de clé
-      return res.status(200).json({ "11": 1, "12": 3, "13": 0, "18": 12, "24": 5 });
+    // Cache 60s
+    if (cache.data && Date.now() - cache.ts < CACHE_TTL) {
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json(cache.data);
     }
 
-    const out = { "11":0, "12":0, "13":0, "18":0, "24":0 };
-    // lance en parallèle par ligne
-    await Promise.all(Object.keys(LINE_POINTS).map(async line => {
-      out[line] = await delayForLine(LINE_POINTS[line]);
+    if (!KEY) {
+      const demo = { "11": 2, "12": 6, "13": 3, "18": 18, "24": 12 };
+      cache = { ts: Date.now(), data: demo };
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json(demo);
+    }
+
+    const out = {};
+    await Promise.all(Object.keys(LINE_ROUTES).map(async (ln) => {
+      try {
+        out[ln] = await fetchDelayForRoute(LINE_ROUTES[ln]);
+      } catch {
+        out[ln] = 0;
+      }
     }));
 
+    cache = { ts: Date.now(), data: out };
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json(out);
   } catch (e) {
-    // fallback safe
-    return res.status(200).json({ "11": 0, "12": 0, "13": 0, "18": 0, "24": 0 });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ "11":0, "12":0, "13":0, "18":0, "24":0 });
   }
 }
